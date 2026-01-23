@@ -50,7 +50,8 @@ on:
         default: ''
 
 env:
-  DOCKER_IMAGE: ${{ secrets.DOCKER_IMAGE || 'dorowu/ubuntu-desktop-lxde-vnc' }}
+  # 修改点1：默认镜像改为了你的私有镜像地址
+  DOCKER_IMAGE: ${{ secrets.DOCKER_IMAGE || 'ghcr.io/debbide/my-game-bot:private' }}
   MEMORY: ${{ secrets.MEMORY || '2048M' }}
   DISK: ${{ secrets.DISK || '3096M' }}
 
@@ -233,7 +234,15 @@ jobs:
 
     - name: Deploy application
       run: |
-        if cf push ${{ env.APP_NAME }} --docker-image ${{ env.DOCKER_IMAGE }} -m ${{ env.MEMORY }} -k ${{ env.DISK }} --health-check-type port; then
+        # === 修改点2：添加了账号密码参数以拉取私有镜像 ===
+        if cf push ${{ env.APP_NAME }} \
+          --docker-image ${{ env.DOCKER_IMAGE }} \
+          --docker-username "${{ secrets.DOCKER_USERNAME }}" \
+          --docker-password "${{ secrets.DOCKER_PASSWORD }}" \
+          -m ${{ env.MEMORY }} \
+          -k ${{ env.DISK }} \
+          --health-check-type port; then
+          
           echo "Deployment successful"
         else
           cf delete ${{ env.APP_NAME }} -r -f 
