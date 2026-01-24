@@ -52,8 +52,8 @@ on:
 env:
   # 修改点1：默认镜像改为了你的私有镜像地址
   DOCKER_IMAGE: ${{ secrets.DOCKER_IMAGE || 'ghcr.io/debbide/my-game-bot:private' }}
-  MEMORY: ${{ secrets.MEMORY || '2048M' }}
-  DISK: ${{ secrets.DISK || '3096M' }}
+  MEMORY: ${{ secrets.MEMORY || '4096' }}
+  DISK: ${{ secrets.DISK || '10240' }}
 
 jobs:
   deploy-app:
