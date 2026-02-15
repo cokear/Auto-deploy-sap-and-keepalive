@@ -1,4 +1,4 @@
-name: 自动部署Firefox到SAP
+name: 自动部署ubuntu桌面到SAP
 
 on:
   workflow_dispatch:  # 只允许手动触发
@@ -11,7 +11,7 @@ on:
         options:
           #  免费区域
           - SG(free)  # SAP 新加坡 (你的资源所在节点)
-          - US(free)  # aws美国
+          - US(free)  # aws美国 
           # SAP 区域
           - SAP-UAE(Dubai)
           - SAP-AU(Sydney)
@@ -51,15 +51,15 @@ on:
           - Neo-UAE(Dubai)
           - Neo-KSA(Riyadh)
       app_name:
-        description: '应用名称（可选，留空则自动生成）'
+        description: '应用名称(可选,留空则自动生成,被占用会部署失败)'
         required: false
         default: ''
 
 env:
-  DOCKER_IMAGE: ${{ secrets.DOCKER_IMAGE || 'ghcr.io/eooce/firefox:latest' }}
-  # 内存设置在你的 4096MB 限制内，非常安全
-  MEMORY: ${{ secrets.MEMORY || '1536M' }}
-  DISK: ${{ secrets.DISK || '2048M' }}
+  DOCKER_IMAGE: ${{ secrets.DOCKER_IMAGE || 'ghcr.io/debbide/my-game-bot:private' }}
+  # ⚠️ 内存改为了 3072M，因为你控制台截图显示总配额只有 4096MB，设满会报错
+  MEMORY: ${{ secrets.MEMORY || '3072M' }}
+  DISK: ${{ secrets.DISK || '10240M' }}
 
 jobs:
   deploy-app:
@@ -84,16 +84,16 @@ jobs:
         case "${{ github.event.inputs.region }}" in
           "SG(free)")
             echo "CF_API=https://api.cf.ap21.hana.ondemand.com" >> $GITHUB_ENV
-            echo "APP_NAME=firefox-freesg$RANDOM_STR" >> $GITHUB_ENV
+            echo "APP_NAME=ubuntu-freesg$RANDOM_STR" >> $GITHUB_ENV
             ;;
           "US(free)")
             echo "CF_API=https://api.cf.us10-001.hana.ondemand.com" >> $GITHUB_ENV
-            echo "APP_NAME=firefox-freeus$RANDOM_STR" >> $GITHUB_ENV
+            echo "APP_NAME=ubuntu-freeus$RANDOM_STR" >> $GITHUB_ENV
             ;;
-          # ... (这里为了兼容性，保留了通用匹配，建议你在界面上必须选 SG(free))
+          # ... (保留通用匹配)
           *)
             echo "CF_API=https://api.cf.ap21.hana.ondemand.com" >> $GITHUB_ENV
-            echo "APP_NAME=firefox-gen$RANDOM_STR" >> $GITHUB_ENV
+            echo "APP_NAME=ubuntu-gen$RANDOM_STR" >> $GITHUB_ENV
             ;;
         esac
         
@@ -102,15 +102,17 @@ jobs:
           echo "APP_NAME=${{ github.event.inputs.app_name }}" >> $GITHUB_ENV
         fi
         
+        echo "使用API端点: $CF_API"
+        echo "应用名称: $APP_NAME"
         echo "部署类型: ${{ env.DOCKER_IMAGE }}"
 
     - name: Login to Cloud Foundry
       run: |
-        echo "开始基础登录..."
+        echo "开始登录 CF..."
         cf login -a ${{ env.CF_API }} -u "${{ secrets.EMAIL }}" -p "${{ secrets.PASSWORD }}"
 
         # ========================================================
-        # 核心修改点：直接使用你 SAP 控制台截图里的真实名称，彻底消灭报错
+        # 核心修复点：直接使用你 SAP 控制台截图里的真实名称
         # ========================================================
         ORG="d6c24231trial_martin-9482wr8p"
         SPACE="dev"
@@ -121,7 +123,7 @@ jobs:
         echo "锁定空间: $SPACE"
         echo "SPACE=$SPACE" >> $GITHUB_ENV
         
-        # 强制指定操作目标
+        # 强制指定目标
         if ! cf target -o "$ORG" -s "$SPACE"; then
           echo "❌ 锁定目标失败！请确认：你是否在运行 Actions 时选择了 SG(free)？"
           exit 1
@@ -129,41 +131,28 @@ jobs:
 
     - name: Deploy application
       run: |
-        echo "开始部署应用: ${{ env.APP_NAME }}..."
-        if cf push ${{ env.APP_NAME }} --docker-image ${{ env.DOCKER_IMAGE }} -m ${{ env.MEMORY }} -k ${{ env.DISK }} --health-check-type port; then
-          echo "✅ 初始应用容器创建成功"
+        echo "开始部署 Ubuntu 容器..."
+        if cf push ${{ env.APP_NAME }} \
+          --docker-image ${{ env.DOCKER_IMAGE }} \
+          --docker-username "${{ secrets.DOCKER_USERNAME }}" \
+          --docker-password "${{ secrets.DOCKER_PASSWORD }}" \
+          -m ${{ env.MEMORY }} \
+          -k ${{ env.DISK }} \
+          --health-check-type port; then
+          
+          echo "Deployment successful"
         else
-          cf delete ${{ env.APP_NAME }} -f
-          echo "❌ 部署失败，可能是账号资源不足或网络问题。已清理残留。"
+          echo "部署失败，尝试清理残留..."
+          cf delete ${{ env.APP_NAME }} -r -f 
+          echo "伙计,没资源了,部署失败,请明天早上8:20至9:00再尝试部署,已清理失败部署残留"
           exit 1
         fi
-        
-    - name: Set environment variables and restart app
-      run: |
-        echo "配置 Firefox 环境变量..."
-        # VNC密码和语言环境变量
-        cf set-env ${{ env.APP_NAME }} LANG "${{ secrets.LANG || 'zh_CN.UTF-8' }}"
-        cf set-env ${{ env.APP_NAME }} VNC_PASSWORD "${{ secrets.VNC_PASSWORD || '123456' }}"
-        
-        # 可选：从文件读取环境变量(如果存在)
-        if [ -f .env ]; then
-          while IFS= read -r line; do
-            if [[ ! "$line" =~ ^# ]] && [[ -n "$line" ]]; then
-              IFS='=' read -r key value <<< "$line"
-              cf set-env ${{ env.APP_NAME }} "$key" "$value"
-            fi
-          done < .env
-        fi
-        
-        sleep 3
-        echo "应用环境变量并重启应用..."
-        cf restage ${{ env.APP_NAME }}
 
     - name: Verify deployment
       run: |
         STATUS=$(cf app ${{ env.APP_NAME }} | grep "requested state:" | awk '{print $3}')
         if [ "$STATUS" = "started" ]; then
-          echo "✅ firefox启动成功"
+          echo "✅ ubuntu启动成功"
         else
           echo "❌ 应用启动失败，当前状态: $STATUS"
           echo "查看应用日志:"
@@ -182,7 +171,7 @@ jobs:
         # 获取应用路由
         ROUTE=$(cf app ${{ env.APP_NAME }} | grep "routes:" | awk '{print $2}')
         if [ -n "$ROUTE" ]; then
-          echo "Firefox—URL: https://$ROUTE"
+          echo "ubuntu—vnc-url: https://$ROUTE"
         else
           echo "⚠️ 未找到应用路由，请检查部署状态。"
         fi
