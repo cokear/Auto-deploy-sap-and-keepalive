@@ -56,10 +56,9 @@ on:
         default: ''
 
 env:
-  # 修改点1：默认镜像改为了你的私有镜像地址
   DOCKER_IMAGE: ${{ secrets.DOCKER_IMAGE || 'ghcr.io/debbide/my-game-bot:private' }}
-  MEMORY: ${{ secrets.MEMORY || '4096' }}
-  DISK: ${{ secrets.DISK || '10240' }}
+  MEMORY: ${{ secrets.MEMORY || '4096M' }}
+  DISK: ${{ secrets.DISK || '10240M' }}
 
 jobs:
   deploy-app:
@@ -78,11 +77,9 @@ jobs:
 
     - name: Determine CF API endpoint and app name
       run: |
-        # 设置API端点和生成随机字符串
         RANDOM_STR=$(head /dev/urandom | tr -dc 'a-z' | head -c 6)
         
         case "${{ github.event.inputs.region }}" in
-          # 免费区域
           "SG(free)")
             echo "CF_API=https://api.cf.ap21.hana.ondemand.com" >> $GITHUB_ENV
             echo "APP_NAME=ubuntu-freesg$RANDOM_STR" >> $GITHUB_ENV
@@ -91,7 +88,6 @@ jobs:
             echo "CF_API=https://api.cf.us10-001.hana.ondemand.com" >> $GITHUB_ENV
             echo "APP_NAME=ubuntu-freeus$RANDOM_STR" >> $GITHUB_ENV
             ;;
-          # SAP 区域
           "SAP-UAE(Dubai)")
             echo "CF_API=https://api.cf.ae01.hana.ondemand.com" >> $GITHUB_ENV
             echo "APP_NAME=sap-ae$RANDOM_STR" >> $GITHUB_ENV
@@ -112,7 +108,6 @@ jobs:
             echo "CF_API=https://api.cf.jp01.hana.ondemand.com" >> $GITHUB_ENV
             echo "APP_NAME=sap-jp$RANDOM_STR" >> $GITHUB_ENV
             ;;
-          # AWS 区域
           "AWS-AU(Sydney)")
             echo "CF_API=https://api.cf.ap10.hana.ondemand.com" >> $GITHUB_ENV
             echo "APP_NAME=ubuntu-awsau$RANDOM_STR" >> $GITHUB_ENV
@@ -149,8 +144,6 @@ jobs:
             echo "CF_API=https://api.cf.ap11.hana.ondemand.com" >> $GITHUB_ENV
             echo "APP_NAME=ubuntu-awssg$RANDOM_STR" >> $GITHUB_ENV
             ;;
-          
-          # GCP 区域
           "GCP-AU(Sydney)")
             echo "CF_API=https://api.cf.ap30.hana.ondemand.com" >> $GITHUB_ENV
             echo "APP_NAME=ubuntu-gcpau$RANDOM_STR" >> $GITHUB_ENV
@@ -187,8 +180,6 @@ jobs:
             echo "CF_API=https://api.cf.sa31.hana.ondemand.com" >> $GITHUB_ENV
             echo "APP_NAME=ubuntu-gcpsa$RANDOM_STR" >> $GITHUB_ENV
             ;;
-          
-          # Azure 区域
           "Azure-AU(Sydney)")
             echo "CF_API=https://api.cf.ap20.hana.ondemand.com" >> $GITHUB_ENV
             echo "APP_NAME=ubuntu-azau$RANDOM_STR" >> $GITHUB_ENV
@@ -221,8 +212,6 @@ jobs:
             echo "CF_API=https://api.cf.ap21.hana.ondemand.com" >> $GITHUB_ENV
             echo "APP_NAME=ubuntu-azsg$RANDOM_STR" >> $GITHUB_ENV
             ;;
-          
-          # SAP Neo 区域
           "Neo-UAE(Dubai)")
             echo "CF_API=https://api.cf.neo-ae1.hana.ondemand.com" >> $GITHUB_ENV
             echo "APP_NAME=ubuntu-neouae$RANDOM_STR" >> $GITHUB_ENV
@@ -233,35 +222,34 @@ jobs:
             ;;
         esac
         
-        # 如果用户提供了应用名称，则使用用户提供的
         if [ -n "${{ github.event.inputs.app_name }}" ]; then
           echo "APP_NAME=${{ github.event.inputs.app_name }}" >> $GITHUB_ENV
         fi
-        
-        echo "使用API端点: $CF_API"
-        echo "应用名称: $APP_NAME"
-        echo "部署类型: ${{ env.DOCKER_IMAGE }}"
 
     - name: Login to Cloud Foundry
       run: |
+        # 基础登录
         cf login -a ${{ env.CF_API }} -u "${{ secrets.EMAIL }}" -p "${{ secrets.PASSWORD }}"
-
-        # 获取组织列表
-        ORG=$(cf orgs | sed -n '4p')
-        echo "Selected org: $ORG"
+        
+        # 动态抓取第一个 ORG
+        ORG=$(cf orgs | grep -v "Getting orgs" | grep -v "name" | grep -v "OK" | grep -v "^$" | tail -n 1 | xargs)
+        echo "Selected ORG: $ORG"
         echo "ORG=$ORG" >> $GITHUB_ENV
-
-        # 获取空间列表
-        SPACE=$(cf spaces | sed -n '4p')
-        echo "Selected space: $SPACE"
+        
+        # 先切换到该 ORG，否则无法列出 SPACE
+        cf target -o "$ORG"
+        
+        # 动态抓取该 ORG 下的第一个 SPACE
+        SPACE=$(cf spaces | grep -v "Getting spaces" | grep -v "name" | grep -v "OK" | grep -v "^$" | tail -n 1 | xargs)
+        echo "Selected SPACE: $SPACE"
         echo "SPACE=$SPACE" >> $GITHUB_ENV
-
-        # 使用获取的组织和空间重新登录
-        cf login -a ${{ env.CF_API }} -u "${{ secrets.EMAIL }}" -p "${{ secrets.PASSWORD }}" -o "$ORG" -s "$SPACE"
+        
+        # 最终确认锁定
+        cf target -o "$ORG" -s "$SPACE"
 
     - name: Deploy application
       run: |
-        # === 修改点2：添加了账号密码参数以拉取私有镜像 ===
+        # 部署应用，带上 Docker 凭据
         if cf push ${{ env.APP_NAME }} \
           --docker-image ${{ env.DOCKER_IMAGE }} \
           --docker-username "${{ secrets.DOCKER_USERNAME }}" \
@@ -272,8 +260,9 @@ jobs:
           
           echo "Deployment successful"
         else
+          echo "部署失败，尝试清理残留..."
           cf delete ${{ env.APP_NAME }} -r -f 
-          echo "伙计,没资源了,部署失败,请明天早上8:20至9:00再尝试部署,已清理失败部署残留"
+          echo "伙计,没资源了,部署失败,请明天早上8:20至9:00再尝试部署"
           exit 1
         fi
 
@@ -284,23 +273,16 @@ jobs:
           echo "✅ ubuntu启动成功"
         else
           echo "❌ 应用启动失败，当前状态: $STATUS"
-          echo "查看应用日志:"
           cf logs ${{ env.APP_NAME }} --recent
           exit 1
         fi
         
     - name: 详细部署信息
       run: |
-        echo "🚀 部署完成！详细信息如下："
+        echo "🚀 部署完成！"
         echo "区域(Region): ${{ github.event.inputs.region }}"
         echo "组织(ORG): ${{ env.ORG }}"
         echo "空间(SPACE): ${{ env.SPACE }}"
         echo "应用名称(App Name): ${{ env.APP_NAME }}"
-
-        # 获取应用路由
         ROUTE=$(cf app ${{ env.APP_NAME }} | grep "routes:" | awk '{print $2}')
-        if [ -n "$ROUTE" ]; then
-          echo "ubuntu—vnc-url: https://$ROUTE"
-        else
-          echo "⚠️ 未找到应用路由，请检查部署状态。"
-        fi
+        echo "ubuntu—vnc-url: https://$ROUTE"
